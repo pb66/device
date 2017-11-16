@@ -320,13 +320,13 @@ class Device
             }
 
             // Create inputs processes
-            $result = $this->create_inputs_processes($feeds, $inputs);
+            $result = $this->create_inputs_processes($userid, $feeds, $inputs);
             if ($result["success"] !== true) {
               return array('success'=>false, 'message'=>'Error while creating the inputs process list. ' . $result['message']);
             }
             
             // Create feeds processes
-            $result = $this->create_feeds_processes($feeds, $inputs);
+            $result = $this->create_feeds_processes($userid, $feeds, $inputs);
             if ($result["success"] !== true) {
               return array('success'=>false, 'message'=>'Error while creating the feeds process list. ' . $result['message']);
             }
@@ -396,15 +396,24 @@ class Device
     }
 
     // Create the inputs process lists
-    private function create_inputs_processes($feedArray, $inputArray) {
+    private function create_inputs_processes($userid, $feedArray, $inputArray) {
+        global $user, $feed_settings;
+        
+        require_once "Modules/feed/feed_model.php";
+        $feed = new Feed($this->mysqli, $this->redis, $feed_settings);
+        
         require_once "Modules/input/input_model.php";
-        $input = new Input($this->mysqli,$this->redis, null);
+        $input = new Input($this->mysqli, $this->redis, $feed);
+        
+        require_once "Modules/process/process_model.php";
+        $process = new Process($this->mysqli, $input, $feed, $user->get_timezone($userid));
+        $process_list = $process->get_process_list(); // emoncms supported processes
 
         foreach($inputArray as $i) {
             // for each input
             if (isset($i->processList)) {
                 $inputId = $i->inputId;
-                $result = $this->convertTemplateProcessList($feedArray, $inputArray, $i->processList);
+                $result = $this->convertTemplateProcessList($feedArray, $inputArray, $i->processList, $process_list);
                 if (isset($result["success"])) {
                     return $result; // success is only filled if it was an error
                 }
@@ -412,7 +421,7 @@ class Device
                 $processes = implode(",", $result);
                 if ($processes != "") {
                     $this->log->info("create_inputs_processes() calling input->set_processlist inputId=$inputId processes=$processes");
-                    $input->set_processlist($inputId, $processes);
+                    $input->set_processlist($userid, $inputId, $processes, $process_list);
                 }
             }
         }
@@ -420,17 +429,24 @@ class Device
         return array('success'=>true);
     }
 
-    private function create_feeds_processes($feedArray, $inputArray) {
-        global $feed_settings;
-
+    private function create_feeds_processes($userid, $feedArray, $inputArray) {
+        global $user, $feed_settings;
+        
         require_once "Modules/feed/feed_model.php";
-        $feed = new Feed($this->mysqli,$this->redis,$feed_settings);
+        $feed = new Feed($this->mysqli, $this->redis, $feed_settings);
+        
+        require_once "Modules/input/input_model.php";
+        $input = new Input($this->mysqli, $this->redis, $feed);
+        
+        require_once "Modules/process/process_model.php";
+        $process = new Process($this->mysqli, $input, $feed, $user->get_timezone($userid));
+        $process_list = $process->get_process_list(); // emoncms supported processes
 
         foreach($feedArray as $f) {
             // for each feed
             if (($f->engine == Engine::VIRTUALFEED) && isset($f->processList)) {
                 $feedId = $f->feedId;
-                $result = $this->convertTemplateProcessList($feedArray, $inputArray, $f->processList);
+                $result = $this->convertTemplateProcessList($feedArray, $inputArray, $f->processList, $process_list);
                 if (isset($result["success"])) {
                     return $result; // success is only filled if it was an error
                 }
@@ -438,7 +454,7 @@ class Device
                 $processes = implode(",", $result);
                 if ($processes != "") {
                     $this->log->info("create_feeds_processes() calling feed->set_processlist feedId=$feedId processes=$processes");
-                    $feed->set_processlist($feedId, $processes);
+                    $feed->set_processlist($userid, $feedId, $processes, $process_list);
                 }
             }
         }
@@ -447,13 +463,10 @@ class Device
     }
     
     // Converts template processList
-    private function convertTemplateProcessList($feedArray, $inputArray, $processArray){
+    private function convertTemplateProcessList($feedArray, $inputArray, $processArray, $process_list){
         $resultProcesslist = array();
         if (is_array($processArray)) {
-            require_once "Modules/process/process_model.php";
-            $process = new Process(null,null,null,null);
-            $process_list = $process->get_process_list(); // emoncms supported processes
-
+        
             // create each processlist
             foreach($processArray as $p) {
                 $proc_name = $p->process;
